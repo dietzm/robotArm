@@ -8,6 +8,7 @@ RampsStepper::RampsStepper(int aStepPin, int aDirPin, int aEnablePin) {
   setReductionRatio(1, 3200);
   stepPin = aStepPin;
   dirPin = aDirPin;
+  fc=100;
   enablePin = aEnablePin;
   stepperStepPosition = 0;
   stepperStepTargetPosition;
@@ -16,6 +17,11 @@ RampsStepper::RampsStepper(int aStepPin, int aDirPin, int aEnablePin) {
   pinMode(enablePin, OUTPUT);
   disable();
 }
+
+  void RampsStepper::setSpeed(int speed){
+    //0..150
+    fc = 151-speed; 
+   }  
 
 void RampsStepper::enable(bool value) {
   digitalWrite(enablePin, !value);
@@ -66,20 +72,20 @@ void RampsStepper::stepRelativeRad(float rad) {
 void RampsStepper::update() {   
   while (stepperStepTargetPosition < stepperStepPosition) {  
     digitalWrite(dirPin, HIGH);
-    delayMicroseconds(5);
+    delayMicroseconds(5*fc);
     digitalWrite(stepPin, HIGH);
-    delayMicroseconds(20);
+    delayMicroseconds(20*fc);
     digitalWrite(stepPin, LOW);
-    delayMicroseconds(5);
+    delayMicroseconds(5*fc);
     stepperStepPosition--;
   }
   while (stepperStepTargetPosition > stepperStepPosition) {    
     digitalWrite(dirPin, LOW);
-    delayMicroseconds(5);
+    delayMicroseconds(5*fc);
     digitalWrite(stepPin, HIGH);
-    delayMicroseconds(20);
+    delayMicroseconds(20*fc);
     digitalWrite(stepPin, LOW);
-    delayMicroseconds(5);
+    delayMicroseconds(5*fc);
     stepperStepPosition++;
   }
 }

@@ -6,7 +6,8 @@ public:
   RampsStepper(int aStepPin, int aDirPin, int aEnablePin);
   void enable(bool value = true);
   void disable();
-  
+  void setSpeed(int value);  
+    
   bool isOnPosition() const;
   int getPosition() const;
   void setPosition(int value);
@@ -28,6 +29,7 @@ private:
   int stepPin;
   int dirPin;
   int enablePin;  
+  int fc=10;
   
   float radToStepFactor;
 };

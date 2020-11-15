@@ -36,7 +36,7 @@ bool Command::processMessage(String& msg) {
   msg.toUpperCase();
   command.id = msg[0];
   //exit if not GCode
-  if ((command.id != 'G') && (command.id != 'M')) {
+  if ((command.id != 'G') && (command.id != 'M')&& (command.id != 'R')) {
     printErr();
     return false;
   }  

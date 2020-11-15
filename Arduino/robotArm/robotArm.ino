@@ -21,7 +21,8 @@ Queue<Cmd> queue(15);
 Command command;
 bool absolute=true;
 int button=0;
-int button_released=0;
+int button_pressed=0;
+float pos = -1 ; //-1=not armed 0=start, 100=scan end, 0.001-5.6=pos
 
 void setup() {
   Serial.begin(115200);
@@ -57,19 +58,11 @@ void setup() {
   //reduction of steppers..
   stepperHigher.setReductionRatio(32.0 / 9.0, 200 * 16);  //big gear: 32, small gear: 9, steps per rev: 200, microsteps: 16
   stepperLower.setReductionRatio( 32.0 / 9.0, 200 * 16);
-  stepperRotate.setReductionRatio(32.0 / 9.0, 200 * 16);
+  stepperRotate.setReductionRatio(32 / 9.0, 400 * 16);
   stepperExtruder.setReductionRatio(32.0 / 9.0, 200 * 16);
-  
-  //start positions..
-  stepperHigher.setPositionRad(PI / 2.0);  //90°
-  stepperLower.setPositionRad(0);          // 0°
-  stepperRotate.setPositionRad(0);         // 0°
-  stepperExtruder.setPositionRad(0);
   
   //enable and init..
   setStepperEnable(false);
-  interpolator.setInterpolation(0,120,120,0, 0,120,120,0);
-  
   Serial.println("start");
 }
 
@@ -86,52 +79,117 @@ void setStepperEnable(bool enable) {
   fan.enable(enable);
 }
 
+
+void doscan(){
+          Serial.println("Start scanning");
+          stepperRotate.setSpeed(10);
+          for (float i = 0; i < 5.50; i=i+0.0005){
+            stepperRotate.stepRelativeRad(0.0005);
+            stepperRotate.update();
+            pos=i;
+            int m = (i*1000) ;
+            
+            //Check cancel button
+            if( m % 50 == 0){
+              Serial.println(i);  
+               button = digitalRead(X_MIN_PIN);
+               if(button == LOW){
+                //Interrupt
+                Serial.println("echo Action Button pressed- CANCEL");
+                stepperRotate.enable(false);               
+                fan.enable(false);
+                while(button == LOW){
+                  delay(100);
+                  button = digitalRead(X_MIN_PIN);
+                  //wait for button to be released
+                }
+                return;
+            }
+          }
+      }
+}
+
+
+void returntohome(){
+            Serial.println("Back to home");
+            setStepperEnable(true);
+            stepperRotate.setSpeed(130);
+            for (float i = pos; i > 0; i=i-0.0005){
+   
+              stepperRotate.stepRelativeRad(-0.0005);
+              stepperRotate.update();
+              pos=i;
+              int m = (i*1000) ;
+            
+              //Check cancel button
+              if( m % 50 == 0){
+               Serial.println(i); 
+               button = digitalRead(X_MIN_PIN);
+               if(button == LOW){
+                //Interrupt
+                Serial.println("echo Action Button pressed- CANCEL");
+                stepperRotate.enable(false);               
+                fan.enable(false);             
+                while(button == LOW){
+                  delay(100);
+                  button = digitalRead(X_MIN_PIN);
+                  //wait for button to be released
+                }
+                return;
+            }
+          }
+      }
+      pos=0;
+}
+
 void actionButton(){
   button = digitalRead(X_MIN_PIN);
-  if(button == LOW && button_released == 0){
-    button_released=1;
-    
-   Serial.println("echo Action Button pressed");
-    if(queue.isEmpty()){
-      String gcode[]={"M17","G28","G1 Z120 Y120","G1 X5 Z-90 Y100","G4 T1","G1 Z-145 Y95","G1 Y132","M40","M18"};
-      for (int a=0; a <9; a++){
-      command.insertGcode(gcode[a]);
-      queue.push(command.getCmd());
+  while(button == LOW){
+    Serial.println("echo Action Button low");
+      button_pressed++;
+      delay(50);
+      button = digitalRead(X_MIN_PIN);
+      //wait till  button is released
+        //reset
+      if(button_pressed > 50 ){
+          Serial.println("echo Action long Button pressed");
+          setStepperEnable(false);   
+          pos=-1;
+          delay(500);
       }
-    }else{
-      Serial.println("echo clear command queue");
-      queue.clear();
+  }
+
+
+  
+  if(button_pressed > 1 && button_pressed < 50){
+    Serial.println("echo Action Button pressed");
+    Serial.println(pos);
+    if(pos < 0){
+      setStepperEnable(true); 
+      pos=0;
+      Serial.println("ARMED!!");
+    }else if(pos == 0){
+      doscan();
+    }else if (pos > 0){
+      //return to home
+      returntohome();
     }
   }
-  if(button_released == 1 && button == HIGH){
-    button_released=0;
-    Serial.println("echo Button released");
-    delay(700);
-  }
+  
+  button_pressed=0;
 }
+
 
 void loop () {
   actionButton();
-
-  //update and Calculate all Positions, Geometry and Drive all Motors...
-  interpolator.updateActualPosition();
-  geometry.set(interpolator.getXPosmm(), interpolator.getYPosmm(), interpolator.getZPosmm());
-  stepperRotate.stepToPositionRad(geometry.getRotRad());
-  stepperLower.stepToPositionRad (geometry.getLowRad());
-  stepperHigher.stepToPositionRad(geometry.getHighRad());
-  stepperExtruder.stepToPositionRad(interpolator.getEPosmm());
-  stepperRotate.update();
-  stepperLower.update();
-  stepperHigher.update(); 
-  fan.update();
-  
+ 
   if (!queue.isFull()) {
     if (command.handleGcode()) {
       queue.push(command.getCmd());
       
     }
   }
-  if ((!queue.isEmpty()) && interpolator.isFinished()) {
+  if ((!queue.isEmpty()) ) {
     executeCommand(queue.pop());
     printOk();
   }
@@ -145,58 +203,10 @@ void loop () {
 
 
 
-
-void cmdMove(Cmd (&cmd)) {
-
-   if(absolute){
-    Serial.print("echo move abs");
-    Serial.print(" X:");
-    Serial.print(cmd.valueX);
-    Serial.print(" Y:");
-    Serial.print(cmd.valueY);
-    Serial.print(" Z:");
-    Serial.print(cmd.valueZ);
-    Serial.print(" E:");
-    Serial.println(cmd.valueE);
-    interpolator.setInterpolation(cmd.valueX, cmd.valueY, cmd.valueZ, cmd.valueE, cmd.valueF);
-   }else{
-    Serial.print("echo move rel:");
-    Serial.print(" X:");
-    Serial.print(interpolator.getXPosmm()+cmd.valueX);
-    Serial.print(" Y:");
-    Serial.print(interpolator.getYPosmm()+cmd.valueY);
-    Serial.print(" Z:");
-    Serial.print(interpolator.getZPosmm()+cmd.valueZ);
-    Serial.print(" E:");
-    Serial.println(interpolator.getEPosmm()+cmd.valueE);
-    interpolator.setInterpolation(interpolator.getXPosmm()+cmd.valueX,interpolator.getYPosmm()+cmd.valueY, interpolator.getZPosmm()+cmd.valueZ, interpolator.getEPosmm()+cmd.valueE, cmd.valueF);
-   }
-}
 void cmdDwell(Cmd (&cmd)) {
   delay(int(cmd.valueT * 1000));
 }
-void cmdGripperOn(Cmd (&cmd)) {
-  stepper.setSpeed(5);
-  stepper.step(int(cmd.valueT));
-  delay(50);
-  digitalWrite(STEPPER_GRIPPER_PIN_0, LOW);
-  digitalWrite(STEPPER_GRIPPER_PIN_1, LOW);
-  digitalWrite(STEPPER_GRIPPER_PIN_2, LOW);
-  digitalWrite(STEPPER_GRIPPER_PIN_3, LOW);
-  //printComment("// NOT IMPLEMENTED");
-  //printFault();
-}
-void cmdGripperOff(Cmd (&cmd)) {
-  stepper.setSpeed(5);
-  stepper.step(-int(cmd.valueT));
-  delay(50);
-  digitalWrite(STEPPER_GRIPPER_PIN_0, LOW);
-  digitalWrite(STEPPER_GRIPPER_PIN_1, LOW);
-  digitalWrite(STEPPER_GRIPPER_PIN_2, LOW);
-  digitalWrite(STEPPER_GRIPPER_PIN_3, LOW);
-  //printComment("// NOT IMPLEMENTED");
-  //printFault();
-}
+
 void cmdStepperOn() {
   setStepperEnable(true);
 }
@@ -210,69 +220,7 @@ void cmdFanOff() {
   fan.enable(false);
 }
 
-void cmdGetPos() {
-  Serial.print("X:");
-  Serial.print(geometry.getXmm());
-  Serial.print(" Y:");
-  Serial.print(interpolator.getYPosmm());
-  Serial.print(" Z:");
-  Serial.print(interpolator.getZPosmm());
-  Serial.print(" E:");
-  Serial.print(interpolator.getEPosmm());
-  Serial.print(" ");
-  Serial.print(stepperHigher.getPositionRad());
-}
 
-void cmdSetPosition(Cmd (&cmd)){
-  interpolator.setCurrentPos(cmd.valueX,cmd.valueY,cmd.valueZ,cmd.valueE);
-}
-
-void cmdHome(Cmd (&cmd)){
-  //Home always all axis because we do not have the passed XYZ letters here
-  //Do homing by moving up the lower shank and disable the higher shank
-  Serial.println(stepperLower.getPosition());
-  stepperLower.setPosition(0);
-  stepperHigher.enable(false); //Spring
-  for(int i=0;i<250;i++){
-    stepperLower.stepToPosition(i*-1);  
-    //stepperHigher.stepToPosition(i*-1);  
-    stepperLower.update();
-    //stepperHigher.update();
-    delay(10); 
-    Serial.println(stepperLower.getPosition());
-    //Serial.println(stepperHigher.getPosition());
-  }
-  stepperHigher.enable(true);
-  interpolator.setCurrentPos(0,-20,125,0);
-  cmd.valueX=0;
-  cmd.valueY=120;
-  cmd.valueZ=160;
-  cmdMove(cmd) ;
-}
-
-
-void cmdOpen(Cmd (&cmd)){
-  //Home always all axis because we do not have the passed XYZ letters here
-  Serial.println(stepperLower.getPosition());
-  stepperLower.setPosition(0);
-  stepperHigher.setPosition(0);
-  stepperHigher.enable(false);
-  for(int i=0;i<200;i++){
-    stepperLower.stepToPosition(i*-1);  
-    stepperLower.update();
-
-    if(i==100){
-       Serial.println("echo High turbo");
-      stepperHigher.enable(true);
-    }
-    if(i>100){
-          stepperHigher.stepToPosition(i*0.05);  
-          stepperHigher.update();
-    }
-    delay(15); 
-  }
-  stepperHigher.enable(true);
-}
 
 
 void handleAsErr(Cmd (&cmd)) {
@@ -314,36 +262,47 @@ void executeCommand(Cmd cmd) {
   }
   
    //decide what to do
-  if (cmd.id == 'G') {
-    switch (cmd.num) {
-      case 0: cmdMove(cmd); break;
-      case 1: cmdMove(cmd); break;
-      case 4: cmdDwell(cmd); break;
-      case 28: cmdHome(cmd); break;
-      //case 21: break; //set to mm
-      case 90: absolute=true; break;
-      case 91: absolute=false; break;
-      case 92: cmdSetPosition(cmd); break;
-      default: handleAsErr(cmd); 
-    }
-  } else if (cmd.id == 'M') {
+  if (cmd.id == 'M') {
     switch (cmd.num) {
       //case 0: cmdEmergencyStop(); break;
-      case 3: cmdGripperOn(cmd); break;
-      case 5: cmdGripperOff(cmd); break;
       case 17: cmdStepperOn(); break;
       case 18: cmdStepperOff(); break;
       case 105: Serial.print("T:0 B:0 "); break;
       case 106: cmdFanOn(); break;
       case 107: cmdFanOff(); break;
-      case 114: cmdGetPos();break;
-      case 40: cmdOpen(cmd);break;
       default: handleAsErr(cmd); 
     }
+  } else if (cmd.id == 'R') {
+     switch (cmd.num) {
+      case 1:
+           doscan();
+           break;
+     case 2:
+           returntohome();
+           break;
+     case 3:
+         Serial.println("H-");
+        stepperHigher.stepRelativeRad(-0.001);
+        stepperHigher.update();
+        break;
+     case 4:
+        Serial.println("H+");
+        stepperHigher.stepRelativeRad(0.001);
+        stepperHigher.update();
+        break;
+      case 5:
+         Serial.println("L-");
+        stepperLower.stepRelativeRad(-0.001);
+        stepperLower.update();
+        break;
+     case 6:
+        Serial.println("L+");
+        stepperLower.stepRelativeRad(0.001);
+        stepperLower.update();
+        break;
+        
+  }
   } else {
     handleAsErr(cmd); 
   }
 }
-
-
-
